@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List
 
+
 @dataclass
 class ItemAddress:
     category: str
@@ -8,20 +9,15 @@ class ItemAddress:
 
 @dataclass
 class ItemsToCompute:
-    data_version: int = -1
+    batch_id: int
     addr_list: List[ItemAddress] = field(default_factory=list)
 
 @dataclass
 class ItemsComputed:
+    batch_id: int
     addr_list: List[ItemAddress] = field(default_factory=list)
 
 @dataclass
 class PresentationConfig:
     text_color: str = "black"
     addr_list: List[ItemAddress] = field(default_factory=list)
-
-@dataclass
-class ResultPollingState:
-    compute_timestamp: int
-    missing_addr_list: List[ItemAddress] = field(default_factory=list)
-

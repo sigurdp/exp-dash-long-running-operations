@@ -1,9 +1,12 @@
-from xmlrpc.client import Boolean
+from pathlib import Path
+
 import diskcache
 
-class ResultStore:
-    def __init__(self, cache_dir:str) -> None:
-        self._cache = diskcache.Cache(cache_dir)
+
+class ResultCache:
+    def __init__(self, root_cache_dir:str) -> None:
+        self._cache = diskcache.Cache(Path(root_cache_dir)/"result_cache")
+        self._cache.clear()
 
     def get_result(self, cat:str, item_name:str) -> str:
         key = self._make_key(cat, item_name)
@@ -13,7 +16,7 @@ class ResultStore:
         key = self._make_key(cat, item_name)
         return self._cache.set(key, res)
 
-    def has_result(self, cat:str, item_name:str) -> Boolean:
+    def has_result(self, cat:str, item_name:str) -> bool:
         key = self._make_key(cat, item_name)
         return key in self._cache
 

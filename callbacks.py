@@ -1,20 +1,22 @@
-from time import sleep
-import dash
-from dash import html
-from dash.dependencies import Input, Output, State
-from dash.long_callback import DiskcacheLongCallbackManager
-import pandas as pd
-from concurrent.futures import ProcessPoolExecutor
-from dacite import from_dict
 from dataclasses import asdict
+from time import sleep
+from typing import List
 
+import dash
 import diskcache
+import pandas as pd
+from dacite import from_dict
+from dash import html
+from dash.dependencies import Input, Output
+from dash.long_callback import DiskcacheLongCallbackManager
 
-from app_types import ItemAddress, ItemsComputed, ItemsToCompute, PresentationConfig, ResultPollingState
-from result_store import ResultStore
+from datatypes import ItemAddress, ItemsComputed, ItemsToCompute, PresentationConfig
+from result_cache import ResultCache
+from sequence_numbers import SequenceNumbers
 
 LONG_CALLBACK_MANAGER = DiskcacheLongCallbackManager(diskcache.Cache("./my_diskcache/for_long_callbacks"))
-RESULT_STORE = ResultStore("./my_diskcache/result_store")
+RESULT_CACHE = ResultCache("./my_diskcache")
+SEQUENCE_NUMBERS = SequenceNumbers("./my_diskcache")
 
 inventory_input_data = [
     [ "CAT",     "ITEM" ],
@@ -28,27 +30,27 @@ inventory_input_data = [
     [ "cat_b",   "item_102"],
     [ "cat_b",   "item_103"],
 ]
-
 INVENTORY_DF = pd.DataFrame(inventory_input_data[1:], columns=inventory_input_data[0])
 
 
+# Notes:
 #
-# Look into: https://github.com/uqfoundation/multiprocess
+# Maybe look into: https://github.com/uqfoundation/multiprocess
 #
 
 
 def register_callbacks(app: dash.Dash) -> None:
 
-    # =========================
+    # =========================================================================
     @app.callback(
-        Output(component_id='category_dropdown', component_property='options'),
-        Output(component_id='category_dropdown', component_property='value'),
-        Input(component_id="dummy_div_1", component_property="children")
+        Output("category_dropdown", "options"),
+        Output("category_dropdown", "value"),
+        Input("dummy_div_1", "children")
     )
-    def populate_category_dropdown(dummy):
-        print(f"populate_category_dropdown()")
+    def populate_category_dropdown(_dummy):
+        print("populate_category_dropdown()")
         categories=INVENTORY_DF["CAT"].unique().tolist()
-        
+
         options=[]
         for cat in categories:
             options.append({"label" : cat, "value": cat})
@@ -56,23 +58,23 @@ def register_callbacks(app: dash.Dash) -> None:
         return options, categories[0]
 
 
-    # =========================
+    # =========================================================================
     @app.callback(
-        Output(component_id="selected_items_list", component_property="options"),
-        Output(component_id="selected_items_list", component_property="value"),
-        Input(component_id='category_dropdown', component_property='value'),
-        Input(component_id="selected_items_list", component_property="value"),
+        Output("items_checklist", "options"),
+        Output("items_checklist", "value"),
+        Input("category_dropdown", "value"),
+        Input("items_checklist", "value"),
     )
-    def update_selected_items_list(selected_category, old_sel_items):
-        print(f"update_selected_items_list(selected_category={selected_category})")
+    def update_items_checklist(selected_category, old_selected_items):
+        print(f"update_items_checklist(selected_category={selected_category})")
         available_items = INVENTORY_DF.loc[INVENTORY_DF["CAT"] == selected_category]["ITEM"].tolist()
         options = []
         for i in available_items:
             options.append({ "label": i, "value": i})
 
         new_sel_items = []
-        if old_sel_items:
-            for i in old_sel_items:
+        if old_selected_items:
+            for i in old_selected_items:
                 if i in available_items:
                     new_sel_items.append(i)
 
@@ -82,160 +84,124 @@ def register_callbacks(app: dash.Dash) -> None:
         return options, new_sel_items
 
 
-    # =========================
+    # =========================================================================
     @app.callback(
-        Output(component_id="dummy_div_2", component_property="children"),
-        Input(component_id="clear_result_store_button", component_property="n_clicks"),
+        Output("dummy_div_2", "children"),
+        Input("clear_result_cache_button", "n_clicks"),
     )
-    def clear_result_store_button_clicked(n_clicks):
-        print(f"clear_result_store_button_clicked()")
-        RESULT_STORE.clear_all_results()
+    def clear_result_cache_button_clicked(_n_clicks):
+        print("clear_result_cache_button_clicked()")
+        RESULT_CACHE.clear_all_results()
         return ""
 
 
-    # =========================
+    # =========================================================================
     @app.callback(
-        Output(component_id="presentation_config_store", component_property="data"),
-        Output(component_id="items_to_compute_store", component_property="data"),
-        Output(component_id="items_to_compute_store", component_property="clear_data"),
-        Input(component_id="category_dropdown", component_property="value"),
-        Input(component_id="selected_items_list", component_property="value"),
-        Input(component_id="text_color_radioitems", component_property="value"),
+        Output("presentation_config_store", "data"),
+        Output("items_to_compute_store", "data"),
+        Output("items_to_compute_store", "clear_data"),
+        Input("category_dropdown", "value"),
+        Input("items_checklist", "value"),
+        Input("text_color_radioitems", "value"),
     )
     def determine_items_to_compute_and_present(category, selected_items, text_color):
         print(f"determine_items_to_compute_and_present()  category={category}, items={selected_items}")
-        
-        items_to_compute = ItemsToCompute()
+
         presentation_config = PresentationConfig(text_color=text_color)
+        addresses_to_compute: List[ItemAddress] = []
 
         for item in selected_items:
-            item_address = ItemAddress(category, item)
-            presentation_config.addr_list.append(item_address)
+            address = ItemAddress(category, item)
+            presentation_config.addr_list.append(address)
 
-            if not RESULT_STORE.has_result(category, item):
-                items_to_compute.addr_list.append(item_address)
+            if not RESULT_CACHE.has_result(category, item):
+                addresses_to_compute.append(address)
 
-        if len(items_to_compute.addr_list) > 0:
+        if len(addresses_to_compute) > 0:
+            items_to_compute = ItemsToCompute(batch_id=SEQUENCE_NUMBERS.generate("batchid"), addr_list=addresses_to_compute)
             return asdict(presentation_config), asdict(items_to_compute), False
         else:
             return asdict(presentation_config), dash.no_update, True
 
 
-    # =========================
+    # =========================================================================
     @app.long_callback(
-        Output(component_id="items_computed_store", component_property="data"),
-        Output(component_id="debug_compute_info_div", component_property="children"),
-        Input(component_id="items_to_compute_store", component_property="data"),
-        running=[
-            (Output("compute_results_status_div", "children"), "compute RUNNING...", "compute finished"),
-            (Output("result_polling_interval", "disabled"), False, True)
-        ],
+        Output("items_computed_store", "data"),
+        Input("items_to_compute_store", "data"),
+        running=[(Output("dbg_is_computing_status_div", "children"), "compute RUNNING...", "compute not running")],
+        progress=[Output("progress_store", "data")],
         manager=LONG_CALLBACK_MANAGER,
-        interval=1000,
+        interval=100,
         prevent_initial_call=True,
     )
-    def compute_results(items_to_compute_data):
-        print(f"compute_results()")
-        
+    def compute_results(set_progress, items_to_compute_data):
+        print("compute_results()")
+
         if not items_to_compute_data:
-            print(f"no result to compute, returning immediately")
-            return dash.no_update, dash.no_update
+            print("no result to compute, returning immediately")
+            return dash.no_update
 
         items_to_compute = from_dict(data_class=ItemsToCompute, data=items_to_compute_data)
-        items_computed = ItemsComputed()
+        items_computed = ItemsComputed(batch_id=items_to_compute.batch_id)
 
-        compute_dbg_info_list = []
+        print(f"computing {len(items_to_compute.addr_list)} results, batch_id={items_to_compute.batch_id}")
 
-        for index, addr in enumerate(items_to_compute.addr_list):
-            res = _fake_calculate_item(index, addr.category, addr.item_name)
+        for addr in items_to_compute.addr_list:
+            _fake_calculate_and_store_result(addr.category, addr.item_name)
             items_computed.addr_list.append(addr)
-            
-            info_str = f"{addr} --> {res}"
-            compute_dbg_info_list.append(info_str)
 
-        html_list_items = [html.Li(info_str) for info_str in compute_dbg_info_list]
-        children = [
-            html.B("Debug computed info:"),
-            html.Ul(children=html_list_items)
-        ]
+            # Here we're sending the entire ItemsComputed structure through the progress
+            # mechanism, even though we're really only interested in signaling that something
+            # new is available
+            set_progress((asdict(items_computed),))
 
-        return asdict(items_computed), children
+        return asdict(items_computed)
 
 
-    # =========================
+    # =========================================================================
+    # Note that setting the progress_store's data property as input seems to continuously
+    # trigger the callback. Is this a bug?
+    # A work-around seems to be to only use the modified_timestamp attribute as input
+    # instead - go figure!
     @app.callback(
-        Output(component_id="main_presentation_div", component_property="children"),
-        Input(component_id="presentation_config_store", component_property="data"),
-        Input(component_id="items_computed_store", component_property="data"),
-        Input(component_id="result_polling_state_store", component_property="data"),
+        Output("main_presentation_div", component_property="children"),
+        Input("presentation_config_store", component_property="data"),
+        Input("items_computed_store", component_property="data"),
+        Input("progress_store", component_property="modified_timestamp"),
+        
     )
-    def render_main_presentation(presentation_config_data, _items_computed_data, _result_polling_state):
-        print(f"render_main_presentation()")
+    def render_main_presentation(presentation_config_data, _items_computed_data, _progress_modified_timestamp):
+
+        print("render_main_presentation()")
+        #print("triggering on:", dash.callback_context.triggered)
 
         presentation_config = from_dict(data_class=PresentationConfig, data=presentation_config_data)
 
-        presentation_html_items = []
+        html_items = []
         for addr in presentation_config.addr_list:
-            result = RESULT_STORE.get_result(addr.category, addr.item_name)
-            presentation_html_items.append(html.Li(f"{addr.category}, {addr.item_name}: {result}"))
+            result = RESULT_CACHE.get_result(addr.category, addr.item_name)
+            html_items.append(html.Li(f"{addr.category}, {addr.item_name}: {result}"))
 
         return html.Div(
-            style={"color": presentation_config.text_color}, 
+            style={"color": presentation_config.text_color},
             children=[
                 html.U(html.B("MAIN PRESENTATION:")),
                 html.P("Items:"),
-                html.Ul(children=presentation_html_items),
+                html.Ul(children=html_items),
             ]
         )
 
 
-    # =========================
+    # =========================================================================
     @app.callback(
-        Output(component_id="result_polling_state_store", component_property="data"),
-        Output(component_id="debug_result_polling_div", component_property="children"),
-        Input(component_id="result_polling_interval", component_property="n_intervals"),
-        State(component_id="items_to_compute_store", component_property="data"),
-        State(component_id="items_to_compute_store", component_property="modified_timestamp"),
-        State(component_id="result_polling_state_store", component_property="data"),
-        prevent_initial_call = True
-    )
-    def poll_for_new_results(n_intervals, items_to_compute_data, items_to_compute_timestamp, old_result_polling_state_data):
-        print(f"poll_for_new_results({n_intervals})")
-
-        items_to_compute = from_dict(data_class=ItemsToCompute, data=items_to_compute_data) if items_to_compute_data else ItemsToCompute()
-
-        old_polling_state = from_dict(data_class=ResultPollingState, data=old_result_polling_state_data) if old_result_polling_state_data else None
-        new_polling_state = ResultPollingState(compute_timestamp=items_to_compute_timestamp)
-
-        for addr in items_to_compute.addr_list:
-            if not RESULT_STORE.has_result(addr.category, addr.item_name):
-                new_polling_state.missing_addr_list.append(addr)
-
-        tot_count = len(items_to_compute.addr_list)
-        missing_count = len(new_polling_state.missing_addr_list)
-
-        debug_div_children = [
-            html.U(html.B("Debug polling info:")),
-            html.P(f"n_intervals={n_intervals}"),
-            html.P(f"computed {tot_count - missing_count} of {tot_count}")
-        ]
-
-        if old_polling_state and old_polling_state == new_polling_state:
-            return dash.no_update, debug_div_children
-        else:
-            return asdict(new_polling_state), debug_div_children
-
-
-    # =========================
-    @app.callback(
-        Output(component_id="debug_info_div", component_property="children"),
-        Input(component_id="items_to_compute_store", component_property="data"),
+        Output(component_id="dbg_info_div", component_property="children"),
         Input(component_id="presentation_config_store", component_property="data"),
+        Input(component_id="items_to_compute_store", component_property="data"),
     )
-    def update_debug_info(items_to_compute_data, presentation_config_data):
-        print(f"update_debug_info()")
-        
-        items_to_compute = from_dict(data_class=ItemsToCompute, data=items_to_compute_data) if items_to_compute_data else ItemsToCompute()
+    def update_debug_info(presentation_config_data, items_to_compute_data):
+        print("update_debug_info()")
+
+        items_to_compute = from_dict(data_class=ItemsToCompute, data=items_to_compute_data) if items_to_compute_data else ItemsToCompute(-1)
         presentation_config = from_dict(data_class=PresentationConfig, data=presentation_config_data)
 
         presentation_html_items = [html.Li(str(addr)) for addr in presentation_config.addr_list]
@@ -249,21 +215,22 @@ def register_callbacks(app: dash.Dash) -> None:
             ]),
             html.P("Items to present:"),
             html.Ul(children=presentation_html_items),
-            html.P("Items to compute:"),
-            html.Ul(children=compute_html_items)
+            html.P(f"Items to compute: (batch_id={items_to_compute.batch_id})"),
+            html.Ul(children=compute_html_items),
         ]
 
         return children
 
 
 
-def _fake_calculate_item(index: int, category: str, item_name: str):
-    
-    print(f"calculating item {index}: category={category}, item_name={item_name}")
-    sleep(0.5*(index+1))
-    
+# =========================================================================
+def _fake_calculate_and_store_result(category: str, item_name: str) -> None:
+
+    print(f"calculating item: category={category}, item_name={item_name}")
+
+    sleep(2.1)
     result = f"COMPUTED#{category}_{item_name}"
 
-    RESULT_STORE.set_result(cat=category, item_name=item_name, res=result)
+    print(f"calculating done: category={category}, item_name={item_name}  --> result={result}")
 
-    return result
+    RESULT_CACHE.set_result(cat=category, item_name=item_name, res=result)
