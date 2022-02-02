@@ -33,11 +33,7 @@ INVENTORY_DF = pd.DataFrame(inventory_input_data[1:], columns=inventory_input_da
 
 
 #
-#
-#
 # Look into: https://github.com/uqfoundation/multiprocess
-#
-#
 #
 
 
@@ -192,7 +188,7 @@ def register_callbacks(app: dash.Dash) -> None:
             ]
         )
 
-    """
+
     # =========================
     @app.callback(
         Output(component_id="result_polling_state_store", component_property="data"),
@@ -229,7 +225,6 @@ def register_callbacks(app: dash.Dash) -> None:
         else:
             return asdict(new_polling_state), debug_div_children
 
-    """
 
     # =========================
     @app.callback(
