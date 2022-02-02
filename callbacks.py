@@ -131,7 +131,7 @@ def register_callbacks(app: dash.Dash) -> None:
         running=[(Output("dbg_is_computing_status_div", "children"), "compute RUNNING...", "compute not running")],
         progress=[Output("progress_store", "data")],
         manager=LONG_CALLBACK_MANAGER,
-        interval=100,
+        #interval=500,
         prevent_initial_call=True,
     )
     def compute_results(set_progress, items_to_compute_data):
